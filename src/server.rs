@@ -1,5 +1,5 @@
 use crate::threadpool::ThreadPool;
-use std::{io::{BufReader, Read}, net::{Shutdown, TcpListener, TcpStream}, sync::Arc};
+use std::{io::{BufReader, Read}, net::{Shutdown, TcpListener, TcpStream}};
 
 pub struct Server {
     pool: ThreadPool,
@@ -13,7 +13,7 @@ impl Server {
         Server { pool, listener }
     }
 
-    pub fn listen(self: Arc<Self>) {
+    pub fn listen(&self) {
         println!("Listening on: {:?}", self.listener.local_addr().unwrap());
         for stream in self.listener.incoming() {
             let stream = stream.unwrap();
