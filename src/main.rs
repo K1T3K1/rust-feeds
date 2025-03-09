@@ -3,6 +3,8 @@ use threadpool::ThreadPool;
 
 mod threadpool;
 mod server;
+mod authstore;
+mod sqlite_authstore;
 
 fn main() {
     println!("Starting app...");

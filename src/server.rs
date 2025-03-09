@@ -38,3 +38,4 @@ fn handle_connection(stream: TcpStream) {
     println!("{:?}", data);
     stream.shutdown(Shutdown::Both).unwrap();
 }
+
