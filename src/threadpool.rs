@@ -1,4 +1,7 @@
-use std::{sync::{mpsc, Arc, Mutex}, thread};
+use std::{
+    sync::{mpsc, Arc, Mutex},
+    thread,
+};
 type Job = Box<dyn FnOnce() + Send + 'static>;
 
 pub struct ThreadPool {
@@ -18,7 +21,7 @@ impl ThreadPool {
             workers.push(Worker::new(id, Arc::clone(&receiver)));
         }
 
-        ThreadPool{ workers, sender }
+        ThreadPool { workers, sender }
     }
 
     pub fn execute<F>(&self, fun: F)
@@ -43,7 +46,7 @@ impl Worker {
                 job();
             }
         });
-        
+
         Worker { id, thread }
     }
 }
