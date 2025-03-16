@@ -93,7 +93,6 @@ fn write_info_message(stream: &mut TcpStream) -> Result<TextNonce, &str> {
 #[inline(always)]
 fn read_auth_message(stream: &mut TcpStream) -> Result<Vec<u8>, &'static str> {
     let mut auth_buf = Vec::with_capacity(60);
-    println!("reading auth");
     if let Err(_) = stream.read_to_end(&mut auth_buf) {
         println!(
             "Failed to read auth data from host: {}",
