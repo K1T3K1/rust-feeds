@@ -6,4 +6,5 @@ edition = "2021"
 [dependencies]
 rusqlite = "0.34.0"
 sha2 = "0.10.8"
+smol = "2.0.2"
 textnonce = "1.0.0"
