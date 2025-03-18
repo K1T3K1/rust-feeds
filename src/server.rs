@@ -20,6 +20,7 @@ impl Server {
     pub fn new(port: u32, pool: ThreadPool) -> Server {
         let listener = TcpListener::bind(format!("0.0.0.0:{}", port)).unwrap();
         println!("Bound on port: {:?}", port);
+
         Server {
             pool,
             listener,
@@ -40,7 +41,6 @@ impl Server {
 
 fn handle_first_connection(mut stream: TcpStream) {
     let nonce: TextNonce;
-    println!("Got connection from: {}", stream.peer_addr().unwrap());
     match write_info_message(&mut stream) {
         Ok(n) => nonce = n,
         Err(_) => return,
@@ -49,19 +49,26 @@ fn handle_first_connection(mut stream: TcpStream) {
     let auth_data: Vec<u8>;
     match read_auth_message(&mut stream) {
         Ok(adata) => auth_data = adata,
-        Err(_) => return,
+        Err(_) => {
+            let _ = stream.shutdown(Shutdown::Both);
+            return;
+        },
     }
 
-    let owner_len = auth_data[5] as usize;
-    let owner_name = &auth_data[5..owner_len];
+    let owner_shift = 6 + auth_data[5] as usize;
+    let owner_name = &auth_data[6..owner_shift];
     let owner_name_str: &str;
     match std::str::from_utf8(owner_name) {
         Ok(on) => owner_name_str = on,
         Err(_) => return,
     }
 
-    let user_sha = &auth_data[5 + owner_len..];
-    if auth_user(owner_name_str, nonce.as_bytes(), user_sha) {}
+    let user_sha = &auth_data[owner_shift..];
+    if auth_user(owner_name_str, nonce.as_bytes(), user_sha) {
+        println!("User {} authenticated!", owner_name_str);
+    } else {
+        println!("Failed to authenticate user {}", owner_name_str);
+    }
 }
 
 #[inline(always)]
@@ -78,13 +85,14 @@ fn write_info_message(stream: &mut TcpStream) -> Result<TextNonce, &str> {
 
     if let Err(_) = stream.write_all(&data) {
         println!(
-            "Failed to read auth data from host: {}",
+            "Failed to write info data to host: {}",
             stream.peer_addr().unwrap_or(SocketAddr::new(
                 std::net::IpAddr::V4(std::net::Ipv4Addr::new(1, 1, 1, 1)),
                 1
             ))
         );
         stream.shutdown(Shutdown::Both);
+        let _ = stream.shutdown(Shutdown::Both);
         return Err("Failed to read auth data");
     }
     return Ok(nonce);
@@ -105,7 +113,10 @@ fn read_auth_message(stream: &mut TcpStream) -> Result<Vec<u8>, &'static str> {
         return Err("Failed to read auth data");
     }
 
-    println!("{:?}", auth_buf);
+    if auth_buf.len() < 39 {
+        write_error_message(stream, &format!("Expected at least 39 bytes. Got: {}.", auth_buf.len()));
+        return Err("Not enough data");
+    }
 
     if auth_buf[4] != 2 {
         println!(
@@ -117,8 +128,28 @@ fn read_auth_message(stream: &mut TcpStream) -> Result<Vec<u8>, &'static str> {
             ))
         );
         stream.shutdown(Shutdown::Both);
+        write_error_message(stream, &format!("Invalid Error Code. Expected 2. Got: {}.", auth_buf[4]));
         return Err("Invalid Op Code");
     }
 
     return Ok(auth_buf);
 }
+
+fn write_error_message(stream: &mut TcpStream, error_message: &str) {
+    let capacity = 5 + error_message.len();
+    let mut data: Vec<u8> = Vec::with_capacity(capacity);
+    data.extend_from_slice(&capacity.to_be_bytes());
+    data.push(0);
+    data.extend_from_slice(&error_message.as_bytes());
+
+    if let Err(_) = stream.write_all(&data) {
+        println!(
+            "Failed to write error data to host: {}",
+            stream.peer_addr().unwrap_or(SocketAddr::new(
+                std::net::IpAddr::V4(std::net::Ipv4Addr::new(1, 1, 1, 1)),
+                1
+            ))
+        );
+    }
+}
+

@@ -1,6 +1,8 @@
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, RwLock};
+use textnonce::TextNonce;
+
 
 pub struct AuthDbObject {
     pub owner: String,
@@ -26,12 +28,10 @@ pub trait AuthStoreSource {
 #[inline(always)]
 fn generate_sha(secret: &str, nonce: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
-    let mut byte_string = Vec::with_capacity(32 + secret.len());
-    byte_string.extend_from_slice(nonce);
-    byte_string.extend_from_slice(secret.as_bytes());
-    hasher.update(byte_string.as_slice());
 
-    let mut hash = [0; 32];
+    let mut hash = [0;32];
+    hasher.update(nonce);
+    hasher.update(secret.as_bytes());
     hash.copy_from_slice(hasher.finalize().as_slice());
     hash
 }
