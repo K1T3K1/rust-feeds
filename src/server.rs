@@ -1,59 +1,76 @@
 use textnonce::TextNonce;
 
-use crate::{authstore::auth_user, threadpool::ThreadPool};
+use crate::authstore::auth_user;
 use std::{
     collections::HashMap,
     io::{Read, Write},
-    net::{Shutdown, SocketAddr, TcpListener, TcpStream},
+    net::{Shutdown, SocketAddr},
+    sync::Arc, time::Duration
 };
+
+use smol::{io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream}, stream::StreamExt, Timer};
+use smol::Executor;
 
 static BROKER_NAME: &str = "rust-feeds";
 static NAME_LENGTH: u8 = BROKER_NAME.len() as u8;
 
 pub struct Server {
-    pool: ThreadPool,
+    executor: Arc<Executor<'static>>,
     listener: TcpListener,
     subs: HashMap<String, Vec<TcpStream>>,
 }
 
 impl Server {
-    pub fn new(port: u32, pool: ThreadPool) -> Server {
-        let listener = TcpListener::bind(format!("0.0.0.0:{}", port)).unwrap();
+    pub async fn new(port: u32, executor: Arc<Executor<'static>>) -> Result<Server, std::io::Error> {
+        let listener = TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
         println!("Bound on port: {:?}", port);
 
-        Server {
-            pool,
+        Ok(Server {
+            executor,
             listener,
             subs: HashMap::new(),
-        }
+        })
     }
 
-    pub fn listen(&self) {
-        println!("Listening on: {:?}", self.listener.local_addr().unwrap());
-        for stream in self.listener.incoming() {
-            let stream = stream.unwrap();
+    pub async fn listen(&self) -> Result<(), std::io::Error> {
+        self.executor.run(self.loop_listen()).await
+    }
+
+    async fn loop_listen(&self) -> Result<(), std::io::Error> {
+        println!("Listening on: {:?}", self.listener.local_addr()?);
+        let mut incoming = self.listener.incoming();
+        while let Some(stream) = incoming.next().await {
+            let stream = stream?;
             println!("Got connection from: {}", stream.peer_addr().unwrap());
 
-            self.pool.execute(|| handle_first_connection(stream));
+            self.executor.spawn(async move {
+                let _ = handle_first_connection(stream).await;
+            }).detach();
         }
+        Ok(())
     }
 }
 
-fn handle_first_connection(mut stream: TcpStream) {
+async fn handle_first_connection(mut stream: TcpStream) {
     let nonce: TextNonce;
-    match write_info_message(&mut stream) {
+    println!("Handling conn...");
+    match write_info_message(&mut stream).await {
         Ok(n) => nonce = n,
         Err(_) => return,
     }
 
+    println!("Wrote info message...");
+
     let auth_data: Vec<u8>;
-    match read_auth_message(&mut stream) {
+    match read_auth_message(&mut stream).await {
         Ok(adata) => auth_data = adata,
         Err(_) => {
             let _ = stream.shutdown(Shutdown::Both);
             return;
         },
     }
+
+    println!("Read auth message...");
 
     let owner_shift = 6 + auth_data[5] as usize;
     let owner_name = &auth_data[6..owner_shift];
@@ -72,7 +89,7 @@ fn handle_first_connection(mut stream: TcpStream) {
 }
 
 #[inline(always)]
-fn write_info_message(stream: &mut TcpStream) -> Result<TextNonce, &str> {
+async fn write_info_message(stream: &mut TcpStream) -> Result<TextNonce, &str> {
     let nonce = TextNonce::new();
     let total_len = 6 + 32 + NAME_LENGTH as usize;
     let total_len_32 = total_len as u32;
@@ -83,7 +100,7 @@ fn write_info_message(stream: &mut TcpStream) -> Result<TextNonce, &str> {
     data.extend_from_slice(&BROKER_NAME.as_bytes());
     data.extend_from_slice(&nonce.as_bytes());
 
-    if let Err(_) = stream.write_all(&data) {
+    if let Err(_) = stream.write_all(&data).await {
         println!(
             "Failed to write info data to host: {}",
             stream.peer_addr().unwrap_or(SocketAddr::new(
@@ -99,9 +116,9 @@ fn write_info_message(stream: &mut TcpStream) -> Result<TextNonce, &str> {
 }
 
 #[inline(always)]
-fn read_auth_message(stream: &mut TcpStream) -> Result<Vec<u8>, &'static str> {
+async fn read_auth_message(stream: &mut TcpStream) -> Result<Vec<u8>, &'static str> {
     let mut auth_buf = Vec::with_capacity(60);
-    if let Err(_) = stream.read_to_end(&mut auth_buf) {
+    if let Err(_) = stream.read_to_end(&mut auth_buf).await {
         println!(
             "Failed to read auth data from host: {}",
             stream.peer_addr().unwrap_or(SocketAddr::new(
@@ -135,14 +152,14 @@ fn read_auth_message(stream: &mut TcpStream) -> Result<Vec<u8>, &'static str> {
     return Ok(auth_buf);
 }
 
-fn write_error_message(stream: &mut TcpStream, error_message: &str) {
+async fn write_error_message(stream: &mut TcpStream, error_message: &str) {
     let capacity = 5 + error_message.len();
     let mut data: Vec<u8> = Vec::with_capacity(capacity);
     data.extend_from_slice(&capacity.to_be_bytes());
     data.push(0);
     data.extend_from_slice(&error_message.as_bytes());
 
-    if let Err(_) = stream.write_all(&data) {
+    if let Err(_) = stream.write_all(&data).await  {
         println!(
             "Failed to write error data to host: {}",
             stream.peer_addr().unwrap_or(SocketAddr::new(

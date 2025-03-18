@@ -1,7 +1,6 @@
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, RwLock};
-use textnonce::TextNonce;
 
 
 pub struct AuthDbObject {
