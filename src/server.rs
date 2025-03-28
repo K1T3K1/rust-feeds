@@ -1,18 +1,28 @@
+use lazy_static::lazy_static;
 use textnonce::TextNonce;
 
 use crate::authstore::auth_user;
+use crate::messaging::{read_arbitrary_message, read_auth_message, write_info_message};
+use std::collections::HashMap;
 use std::{net::Shutdown, sync::Arc};
 
 use smol::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::AsyncReadExt,
     net::{TcpListener, TcpStream},
     stream::StreamExt,
     Task,
 };
-use smol::{lock::Mutex, Executor};
+use smol::{
+    lock::{Mutex, RwLock},
+    Executor,
+};
+pub static BROKER_NAME: &str = "rust-feeds";
+pub static NAME_LENGTH: u8 = BROKER_NAME.len() as u8;
 
-static BROKER_NAME: &str = "rust-feeds";
-static NAME_LENGTH: u8 = BROKER_NAME.len() as u8;
+lazy_static! {
+    pub static ref SUBS: RwLock<HashMap<String, Vec<Arc<Mutex<TcpStream>>>>> =
+        RwLock::new(HashMap::new());
+}
 
 pub struct Server {
     listener: TcpListener,
@@ -105,82 +115,13 @@ async fn handle_first_connection(
     }
 }
 
-async fn listen_to_client(mut stream: TcpStream) -> Result<(), std::io::Error> {
-    todo!();
-    let mut buff = [0u8; 8];
-    stream.read_exact(&mut buff).await?;
+async fn listen_to_client(stream: TcpStream) -> Result<(), std::io::Error> {
+    let mut buff = [0u8; 4];
+    let mut reader_half = stream.clone();
+    let writer_half = Arc::new(Mutex::new(stream.clone()));
 
-    println!("{:?}", buff);
-    Ok(())
-}
-
-#[inline(always)]
-async fn write_info_message(stream: &mut TcpStream) -> Result<TextNonce, std::io::Error> {
-    let nonce = TextNonce::new();
-    let total_len = 6 + 32 + NAME_LENGTH as usize;
-    let total_len_32 = total_len as u32;
-    let mut data: Vec<u8> = Vec::with_capacity(total_len);
-    data.extend_from_slice(&total_len_32.to_be_bytes());
-    data.push(1);
-    data.push(NAME_LENGTH);
-    data.extend_from_slice(&BROKER_NAME.as_bytes());
-    data.extend_from_slice(&nonce.as_bytes());
-
-    stream.write_all(&data).await?;
-
-    return Ok(nonce);
-}
-
-#[inline(always)]
-async fn read_auth_message(stream: &mut TcpStream) -> Result<Vec<u8>, std::io::Error> {
-    let mut auth_buf = [0u8; 4];
-    stream.read_exact(&mut auth_buf).await?;
-    let len = u32::from_be_bytes(auth_buf);
-
-    if len < 39 {
-        write_error_message(
-            stream,
-            &format!("Expected at least 34 bytes. Got: {}.", auth_buf.len()),
-        )
-        .await?;
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "Data length less than excepted",
-        ));
+    loop {
+        reader_half.read_exact(&mut buff).await?;
+        read_arbitrary_message(&mut reader_half, &writer_half, u32::from_be_bytes(buff)).await?;
     }
-
-    let mut data_buf = vec![0u8; (len - 4) as usize];
-    stream.read_exact(&mut data_buf).await?;
-
-    if data_buf[0] != 2 {
-        write_error_message(
-            stream,
-            &format!("Invalid Error Code. Expected 2. Got: {}.", auth_buf[4]),
-        )
-        .await?;
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "Wrong op code provided",
-        ));
-    }
-
-    let mut data = Vec::with_capacity(len as usize);
-    data.extend_from_slice(&auth_buf);
-    data.extend_from_slice(&data_buf);
-
-    return Ok(data);
-}
-
-async fn write_error_message(
-    stream: &mut TcpStream,
-    error_message: &str,
-) -> Result<(), std::io::Error> {
-    let capacity = 5 + error_message.len();
-    let mut data: Vec<u8> = Vec::with_capacity(capacity);
-    data.extend_from_slice(&capacity.to_be_bytes());
-    data.push(0);
-    data.extend_from_slice(&error_message.as_bytes());
-
-    stream.write_all(&data).await?;
-    Ok(())
 }

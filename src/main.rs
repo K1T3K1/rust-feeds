@@ -1,13 +1,14 @@
 use authstore::AuthStoreSource;
 use server::Server;
 use smol::Executor;
+use smol_macros::main;
 use sqlite_authstore::SqliteAuthStore;
 use std::sync::Arc;
-use smol_macros::main;
 mod authstore;
+mod message_string;
+mod messaging;
 mod server;
 mod sqlite_authstore;
-mod threadpool;
 
 main! { async fn main() {
     let auth_store = SqliteAuthStore {};

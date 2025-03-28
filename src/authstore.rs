@@ -1,7 +1,7 @@
+use lazy_static::lazy_static;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
-use std::sync::{LazyLock, RwLock};
-
+use std::sync::RwLock;
 
 pub struct AuthDbObject {
     pub owner: String,
@@ -15,10 +15,10 @@ pub struct AuthObject {
     pub allow_sub: HashSet<String>,
     pub allow_pub: HashSet<String>,
 }
-
-pub static AUTH_MAP: LazyLock<RwLock<HashMap<String, AuthObject>>> =
-    LazyLock::new(|| RwLock::new(HashMap::with_capacity(32)));
-
+lazy_static! {
+    pub static ref AUTH_MAP: RwLock<HashMap<String, AuthObject>> =
+        RwLock::new(HashMap::with_capacity(32));
+}
 pub trait AuthStoreSource {
     fn feed_cache(&self);
     fn update_cache(&self);
@@ -28,7 +28,7 @@ pub trait AuthStoreSource {
 fn generate_sha(secret: &str, nonce: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
 
-    let mut hash = [0;32];
+    let mut hash = [0; 32];
     hasher.update(nonce);
     hasher.update(secret.as_bytes());
     hash.copy_from_slice(hasher.finalize().as_slice());
