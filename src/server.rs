@@ -2,7 +2,9 @@ use lazy_static::lazy_static;
 use textnonce::TextNonce;
 
 use crate::authstore::auth_user;
-use crate::messaging::{read_arbitrary_message, read_auth_message, write_info_message};
+use crate::messaging::{
+    read_arbitrary_message, read_auth_message, write_error_message, write_info_message,
+};
 use std::collections::HashMap;
 use std::{net::Shutdown, sync::Arc};
 
@@ -61,7 +63,6 @@ async fn loop_listen(
 
     while let Some(stream) = incoming.next().await {
         let stream = stream?;
-        println!("Got connection from: {}", stream.peer_addr().unwrap());
 
         let arc_serv = Arc::clone(&server);
         let conn_arc_exec = Arc::clone(&executor);
@@ -105,13 +106,15 @@ async fn handle_first_connection(
     }
 
     let user_sha = &auth_data[owner_shift..];
-    if auth_user(owner_name_str, nonce.as_bytes(), user_sha) {
+    if auth_user(owner_name_str, nonce.as_bytes(), user_sha).await {
         let mut server_mtx = server.lock().await;
         let listen_future = executor.spawn(listen_to_client(stream));
         server_mtx.listener_tasks.push(listen_future);
         println!("User {} authenticated!", owner_name_str);
     } else {
-        println!("Failed to authenticate user {}", owner_name_str);
+        if let Err(_) = write_error_message(&mut stream, "Authentication Error").await {
+            let _ = stream.shutdown(Shutdown::Both);
+        }
     }
 }
 

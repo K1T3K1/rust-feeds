@@ -7,9 +7,21 @@ pub fn read_str_with_len(len_str_slice: &[u8]) -> Result<(usize, &str), std::io:
         ));
     }
 
-    let str_text = &len_str_slice[0..str_len as usize];
+    let str_text = &len_str_slice[1..1 + str_len as usize];
     match std::str::from_utf8(str_text) {
         Ok(on) => return Ok((str_len as usize, on)),
+        Err(_) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Str not UTF-8",
+            ))
+        }
+    }
+}
+
+pub fn read_str_no_len(str_slice: &[u8]) -> Result<(usize, &str), std::io::Error> {
+    match std::str::from_utf8(str_slice) {
+        Ok(on) => return Ok((str_slice.len(), on)),
         Err(_) => {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,

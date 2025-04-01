@@ -3,11 +3,12 @@ use std::sync::Arc;
 use textnonce::TextNonce;
 
 use crate::{
-    message_string::read_str_with_len,
+    authstore::{add_sub, auth_pub, auth_sub},
+    errors::{AuthError, PublishError, SubscribeError},
+    message_string::{read_str_no_len, read_str_with_len},
     server::{BROKER_NAME, NAME_LENGTH, SUBS},
 };
 use smol::{
-    future,
     io::{AsyncReadExt, AsyncWriteExt},
     lock::Mutex,
     net::TcpStream,
@@ -64,7 +65,7 @@ pub async fn read_auth_message(stream: &mut TcpStream) -> Result<Vec<u8>, std::i
     if len < 39 {
         write_error_message(
             stream,
-            &format!("Expected at least 34 bytes. Got: {}.", auth_buf.len()),
+            &format!("Expected at least 39 bytes. Got: {}.", len),
         )
         .await?;
         return Err(std::io::Error::new(
@@ -101,11 +102,13 @@ pub async fn read_arbitrary_message(
     stream_writer: &Arc<Mutex<TcpStream>>,
     read_length: u32,
 ) -> Result<(), std::io::Error> {
-    let mut buff = Vec::with_capacity(read_length as usize);
-    buff.extend_from_slice(&read_length.to_be_bytes());
+    let mut buff = vec![0u8; (read_length - 4) as usize];
     stream_reader.read_exact(&mut buff).await?;
+    let mut data_buff = Vec::with_capacity(read_length as usize);
+    data_buff.extend_from_slice(&read_length.to_be_bytes());
+    data_buff.extend_from_slice(&buff);
 
-    match buff[4].try_into() {
+    match data_buff[4].try_into() {
         Ok(OpCodes::ErrorCode) => {
             let mut sw = stream_writer.lock().await;
             wrong_op_code_response(&mut sw, OpCodes::ErrorCode).await?
@@ -119,33 +122,92 @@ pub async fn read_arbitrary_message(
             wrong_op_code_response(&mut sw, OpCodes::Auth).await?
         }
         Ok(OpCodes::Publish) => {
-            let mut sw = stream_writer.lock().await;
-            publish_message(&mut sw, &buff).await?
+            if let Err(e) = publish_message(&data_buff).await {
+                match e {
+                    PublishError::AuthError(AuthError::UnauthPub(channel)) => {
+                        let mut sw = stream_writer.lock().await;
+                        write_error_message(
+                            &mut sw,
+                            &format!(
+                                "User is not allowed to send to channel: {}",
+                                channel.to_owned()
+                            ),
+                        )
+                        .await?;
+                    }
+                    PublishError::IoError(err) => {
+                        let mut sw = stream_writer.lock().await;
+                        write_error_message(&mut sw, &err.to_string()).await?;
+                    }
+                    _ => (),
+                }
+            };
         }
-        Ok(OpCodes::Subscribe) => todo!(),
+        Ok(OpCodes::Subscribe) => match process_subscribe_message(&data_buff).await {
+            Err(e) => {
+                let mut sw = stream_writer.lock().await;
+                match e {
+                    SubscribeError::IoError(io_error) => {
+                        write_error_message(&mut sw, &io_error.to_string()).await?;
+                    }
+                    _ => (),
+                }
+            }
+            Ok(channel_name) => add_sub(channel_name, stream_writer.clone()).await,
+        },
         Ok(OpCodes::Unsubscribe) => todo!(),
-        Err(_) => todo!(),
+        Err(_) => {
+            let mut sw = stream_writer.lock().await;
+            write_error_message(
+                &mut sw,
+                &format!("Unknown OpCode provided. Got: {}", data_buff[4]),
+            )
+            .await?;
+        }
     }
 
     Ok(())
 }
 
 #[inline(always)]
-async fn publish_message(stream_writer: &mut TcpStream, data: &[u8]) -> Result<(), std::io::Error> {
+async fn publish_message(data: &[u8]) -> Result<(), PublishError> {
     if data.len() < 6 {
-        return Err(std::io::Error::new(
+        return Err(PublishError::IoError(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "Data too short",
-        ));
+        )));
     }
+    let (name_len, owner_name) = read_str_with_len(&data[5..])?;
+    let (_, channel_name) = read_str_with_len(&data[6 + name_len..])?;
 
-    let (name_len, _) = read_str_with_len(&data[4..])?;
-    let (channel_name_len, channel_name) = read_str_with_len(&data[4 + name_len..])?;
-
-    push_publish_data_to_streams(channel_name, &data[4 + name_len + 1 + channel_name_len..])
-        .await?;
+    if !auth_pub(owner_name, channel_name).await {
+        return Err(PublishError::AuthError(AuthError::UnauthPub(
+            channel_name.to_owned(),
+        )));
+    }
+    push_publish_data_to_streams(channel_name, &data).await?;
 
     Ok(())
+}
+
+#[inline(always)]
+async fn process_subscribe_message(data: &[u8]) -> Result<&str, SubscribeError> {
+    if data.len() < 6 {
+        return Err(SubscribeError::IoError(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Data too short",
+        )));
+    }
+    let (name_len, owner_name) = read_str_with_len(&data[5..])?;
+    let (_, channel_name) = read_str_no_len(&data[6 + name_len..])?;
+
+    if !auth_sub(owner_name, channel_name).await {
+        return Err(SubscribeError::AuthError(AuthError::UnauthSub(
+            channel_name.to_owned(),
+        )));
+    }
+
+    Ok(channel_name)
 }
 
 #[inline(always)]
@@ -179,7 +241,7 @@ async fn wrong_op_code_response(
     ))
 }
 
-async fn write_error_message(
+pub async fn write_error_message(
     stream: &mut TcpStream,
     error_message: &str,
 ) -> Result<(), std::io::Error> {

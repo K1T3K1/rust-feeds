@@ -1,7 +1,15 @@
 use lazy_static::lazy_static;
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
-use std::sync::RwLock;
+use smol::{
+    lock::{Mutex, RwLock},
+    net::TcpStream,
+};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
+
+use crate::server::SUBS;
 
 pub struct AuthDbObject {
     pub owner: String,
@@ -20,8 +28,8 @@ lazy_static! {
         RwLock::new(HashMap::with_capacity(32));
 }
 pub trait AuthStoreSource {
-    fn feed_cache(&self);
-    fn update_cache(&self);
+    async fn feed_cache(&self);
+    async fn update_cache(&self);
 }
 
 #[inline(always)]
@@ -36,28 +44,38 @@ fn generate_sha(secret: &str, nonce: &[u8]) -> [u8; 32] {
 }
 
 #[inline(always)]
-pub fn auth_user(owner: &str, nonce: &[u8], user_sha: &[u8]) -> bool {
-    let map = AUTH_MAP.read().unwrap();
-    match map.get_key_value(owner) {
+pub async fn auth_user(owner: &str, nonce: &[u8], user_sha: &[u8]) -> bool {
+    let map = AUTH_MAP.read().await;
+    match map.get(owner) {
         None => false,
-        Some((_, auth_object)) => generate_sha(&auth_object.secret, nonce) == *user_sha,
+        Some(auth_object) => generate_sha(&auth_object.secret, nonce) == *user_sha,
     }
 }
 
 #[inline(always)]
-pub fn auth_pub(owner: &str, pub_chan: &str) -> bool {
-    let map = AUTH_MAP.read().unwrap();
-    match map.get_key_value(owner) {
+pub async fn auth_pub(owner: &str, pub_chan: &str) -> bool {
+    let map = AUTH_MAP.read().await;
+    match map.get(owner) {
         None => false,
-        Some((_, auth_object)) => auth_object.allow_pub.contains(pub_chan),
+        Some(auth_object) => auth_object.allow_pub.contains(pub_chan),
     }
 }
 
 #[inline(always)]
-pub fn auth_sub(owner: &str, sub_chan: &str) -> bool {
-    let map = AUTH_MAP.read().unwrap();
-    match map.get_key_value(owner) {
+pub async fn auth_sub(owner: &str, sub_chan: &str) -> bool {
+    let map = AUTH_MAP.read().await;
+    match map.get(owner) {
         None => false,
-        Some((_, auth_object)) => auth_object.allow_sub.contains(sub_chan),
+        Some(auth_object) => auth_object.allow_sub.contains(sub_chan),
+    }
+}
+
+#[inline(always)]
+pub async fn add_sub(sub_chan: &str, stream_writer: Arc<Mutex<TcpStream>>) {
+    let mut subs_lock = SUBS.write().await;
+    if let Some(subs_vec) = subs_lock.get_mut(sub_chan) {
+        subs_vec.push(stream_writer);
+    } else {
+        subs_lock.insert(sub_chan.to_owned(), vec![stream_writer]);
     }
 }
