@@ -8,7 +8,7 @@ static QUERY: &str = "SELECT owner, secret, allow_sub, allow_pub
 
 impl AuthStoreSource for SqliteAuthStore {
     async fn feed_cache(&self) {
-        let conn = Connection::open("/app/sqlite/auth.db").unwrap();
+        let conn = Connection::open("./sqlite/auth.db").unwrap();
 
         let mut stmt = conn.prepare(QUERY).unwrap();
 

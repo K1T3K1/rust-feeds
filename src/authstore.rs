@@ -1,15 +1,7 @@
 use lazy_static::lazy_static;
 use sha2::{Digest, Sha256};
-use smol::{
-    lock::{Mutex, RwLock},
-    net::TcpStream,
-};
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
-
-use crate::server::SUBS;
+use smol::lock::RwLock;
+use std::collections::{HashMap, HashSet};
 
 pub struct AuthDbObject {
     pub owner: String,
@@ -67,15 +59,5 @@ pub async fn auth_sub(owner: &str, sub_chan: &str) -> bool {
     match map.get(owner) {
         None => false,
         Some(auth_object) => auth_object.allow_sub.contains(sub_chan),
-    }
-}
-
-#[inline(always)]
-pub async fn add_sub(sub_chan: &str, stream_writer: Arc<Mutex<TcpStream>>) {
-    let mut subs_lock = SUBS.write().await;
-    if let Some(subs_vec) = subs_lock.get_mut(sub_chan) {
-        subs_vec.push(stream_writer);
-    } else {
-        subs_lock.insert(sub_chan.to_owned(), vec![stream_writer]);
     }
 }

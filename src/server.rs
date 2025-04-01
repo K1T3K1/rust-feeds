@@ -22,7 +22,7 @@ pub static BROKER_NAME: &str = "rust-feeds";
 pub static NAME_LENGTH: u8 = BROKER_NAME.len() as u8;
 
 lazy_static! {
-    pub static ref SUBS: RwLock<HashMap<String, Vec<Arc<Mutex<TcpStream>>>>> =
+    pub static ref SUBS: RwLock<HashMap<String, HashMap<String, Arc<Mutex<TcpStream>>>>> =
         RwLock::new(HashMap::new());
 }
 
@@ -34,7 +34,7 @@ pub struct Server {
 impl Server {
     pub async fn new(port: u32) -> Result<Server, std::io::Error> {
         let listener = TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
-        println!("Bound on port: {:?}", port);
+        println!("Bound on port: {}", port);
 
         Ok(Server {
             listener,
@@ -54,7 +54,7 @@ async fn loop_listen(
     executor: Arc<Executor<'static>>,
 ) -> Result<(), std::io::Error> {
     let server_mtx = server.lock().await;
-    println!("Listening on: {:?}", server_mtx.listener.local_addr()?);
+    println!("Listening on: {}", server_mtx.listener.local_addr()?);
 
     let listener = server_mtx.listener.clone();
     drop(server_mtx);
@@ -126,5 +126,32 @@ async fn listen_to_client(stream: TcpStream) -> Result<(), std::io::Error> {
     loop {
         reader_half.read_exact(&mut buff).await?;
         read_arbitrary_message(&mut reader_half, &writer_half, u32::from_be_bytes(buff)).await?;
+    }
+}
+
+#[inline(always)]
+pub async fn add_sub(sub_chan: &str, sub_name: &str, stream_writer: Arc<Mutex<TcpStream>>) {
+    let mut subs_lock = SUBS.write().await;
+    if let Some(chan_map) = subs_lock.get_mut(sub_chan) {
+        chan_map.insert(sub_name.to_owned(), stream_writer);
+    } else {
+        subs_lock.insert(
+            sub_chan.to_owned(),
+            HashMap::from([(sub_name.to_owned(), stream_writer)]),
+        );
+    }
+}
+
+#[inline(always)]
+pub async fn remove_sub(sub_chan: &str, sub_name: &str) {
+    let mut subs_lock = SUBS.write().await;
+    if let Some(chan_map) = subs_lock.get_mut(sub_chan) {
+        if let Some(stream) = chan_map.get_mut(sub_name) {
+            {
+                let stream_lock = stream.lock().await;
+                let _ = stream_lock.shutdown(Shutdown::Read);
+            }
+            chan_map.remove(sub_name);
+        }
     }
 }

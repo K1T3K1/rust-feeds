@@ -3,10 +3,10 @@ use std::sync::Arc;
 use textnonce::TextNonce;
 
 use crate::{
-    authstore::{add_sub, auth_pub, auth_sub},
+    authstore::{auth_pub, auth_sub},
     errors::{AuthError, PublishError, SubscribeError},
     message_string::{read_str_no_len, read_str_with_len},
-    server::{BROKER_NAME, NAME_LENGTH, SUBS},
+    server::{add_sub, BROKER_NAME, NAME_LENGTH, SUBS},
 };
 use smol::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -153,7 +153,9 @@ pub async fn read_arbitrary_message(
                     _ => (),
                 }
             }
-            Ok(channel_name) => add_sub(channel_name, stream_writer.clone()).await,
+            Ok((owner_name, channel_name)) => {
+                add_sub(channel_name, owner_name, stream_writer.clone()).await
+            }
         },
         Ok(OpCodes::Unsubscribe) => todo!(),
         Err(_) => {
@@ -191,7 +193,7 @@ async fn publish_message(data: &[u8]) -> Result<(), PublishError> {
 }
 
 #[inline(always)]
-async fn process_subscribe_message(data: &[u8]) -> Result<&str, SubscribeError> {
+async fn process_subscribe_message(data: &[u8]) -> Result<(&str, &str), SubscribeError> {
     if data.len() < 6 {
         return Err(SubscribeError::IoError(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
@@ -207,14 +209,14 @@ async fn process_subscribe_message(data: &[u8]) -> Result<&str, SubscribeError> 
         )));
     }
 
-    Ok(channel_name)
+    Ok((owner_name, channel_name))
 }
 
 #[inline(always)]
 async fn push_publish_data_to_streams(channel: &str, data: &[u8]) -> Result<(), std::io::Error> {
     let subs_map = SUBS.read().await;
     if let Some(subs_vec) = subs_map.get(channel) {
-        let fut = subs_vec.iter().map(|stream_mutex| async {
+        let fut = subs_vec.iter().map(|(_, stream_mutex)| async {
             let mut stream = stream_mutex.lock().await;
             stream.write_all(data).await
         });
