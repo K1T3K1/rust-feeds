@@ -3,12 +3,12 @@ use rusqlite::Connection;
 
 pub struct SqliteAuthStore {}
 
-static QUERY: &str = "SELECT owner, secret, allow_sub, allow_pub 
+static QUERY: &str = "SELECT owner, secret, allow_sub, allow_pub
              FROM auth_objects;";
 
 impl AuthStoreSource for SqliteAuthStore {
-    fn feed_cache(&self) {
-        let conn = Connection::open("/app/sqlite/auth.db").unwrap();
+    async fn feed_cache(&self) {
+        let conn = Connection::open("./sqlite/auth.db").unwrap();
 
         let mut stmt = conn.prepare(QUERY).unwrap();
 
@@ -23,7 +23,7 @@ impl AuthStoreSource for SqliteAuthStore {
             })
             .unwrap();
 
-        let mut map = AUTH_MAP.write().unwrap();
+        let mut map = AUTH_MAP.write().await;
         for owner in owners {
             let owner = owner.unwrap();
             map.insert(
@@ -45,7 +45,7 @@ impl AuthStoreSource for SqliteAuthStore {
         }
     }
 
-    fn update_cache(&self) {
+    async fn update_cache(&self) {
         let conn = Connection::open("/app/sqlite/auth.db").unwrap();
         let mut stmt = conn.prepare(QUERY).unwrap();
 
@@ -60,7 +60,7 @@ impl AuthStoreSource for SqliteAuthStore {
             })
             .unwrap();
 
-        let map = AUTH_MAP.read().unwrap();
+        let map = AUTH_MAP.read().await;
 
         let diff_owners: Vec<AuthDbObject> = owners
             .filter_map(|owner_result| match owner_result {
@@ -75,7 +75,7 @@ impl AuthStoreSource for SqliteAuthStore {
             })
             .collect();
 
-        let mut map = AUTH_MAP.write().unwrap();
+        let mut map = AUTH_MAP.write().await;
         for owner in diff_owners {
             let owner = owner;
             map.insert(

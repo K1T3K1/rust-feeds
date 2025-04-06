@@ -1,24 +1,33 @@
 use authstore::AuthStoreSource;
 use server::Server;
-use sqlite_authstore::SqliteAuthStore;
 use smol::Executor;
-use smol::block_on;
+use smol_macros::main;
+use sqlite_authstore::SqliteAuthStore;
 use std::sync::Arc;
-
 mod authstore;
+mod errors;
+mod message_string;
+mod messaging;
 mod server;
 mod sqlite_authstore;
-mod threadpool;
 
-fn main() {
+main! { async fn main() {
     let auth_store = SqliteAuthStore {};
-    auth_store.feed_cache();
+    auth_store.feed_cache().await;
     println!("Starting app...");
     let executor = Arc::new(Executor::new());
-    if let Ok(server) = block_on(Server::new(2137, executor)) {
-        block_on(server.listen());
+    if let Ok(server) = Server::new(2137).await {
+        match server.listen(executor).await {
+            Ok(_) => {return;}
+            Err(_) => {
+                println!("Failed to start server. Shutting down...");
+                return;
+            }
+        }
+
     } else {
         println!("Failed to start server. Shutting down...");
     }
-    
+
+}
 }
